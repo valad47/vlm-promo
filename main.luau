@@ -5,6 +5,11 @@ local tgbot = require_shared("tgbot")
 local io = require_shared("io")
 local cbor = require_shared("cbor")
 local task = require_shared("task")
+local stt = require_shared("stt")
+stt.initSpeaker()
+
+if io.ReadFile("1.mp3") then io.system("ffmpeg -i 1.mp3 -o 1.wav") end
+local sound_penis = stt.loadWAV("1.wav")
 
 tgbot.SetToken(io.ReadFile(".token"))
 
@@ -12,67 +17,158 @@ local tokens = io.ReadFile("gb.tokens")
 tokens = if tokens then cbor.decode(tokens) else {}
 
 local function check(update)
-    return update.message.chat.id ~= -4693646044
+    return update.message.chat.id ~= -1002738827583 and update.message.chat.id ~= 829586530
 end
 
-local function start(update)
-    if check(update) then return end
-    tgbot.SendMessage(update.message.chat.id, "Send promo")
+print("Loading data...")
+
+local active_accounts = {}
+local dead_accounts = {}
+local tokens_count = 0
+for i,v in tokens do
+    tokens_count += #v
 end
-tgbot.AddCommand("start", start)
 
-local function add_token(update)
-    if check(update) then return end
+print("Tokens count:", tokens_count)
 
-    local args = string.split(update.message.text, " ")
-    if #args < 3 then
-        tgbot.SendMessage(update.message.chat.id, "Токен не был введен")
-        return
+local skip = table.find(argv, "--skip") or table.find(argv, "-s")
+
+print("Fetching activity...")
+local S = "_|1623|_"
+
+function check_stats()
+for i,v in tokens then
+    for i,v in v do
+        task.__truethread(function()
+            local headers, data = network.RequestGet(
+                'https://giftsbattle.com/api/v1/user',
+                {
+                    'Accept: */*',
+                    'Content-Type: application/json',
+                    `Authorization: Bearer {v}`,
+                    'Origin: https://giftsbattle.app',
+                    'Referer: https://giftsbattle.app/',
+                    'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15',
+                    'Accept-Language: en-US',
+                    'Sec-Fetch-Dest: empty',
+                    'Sec-Fetch-Mode: cors',
+                    'Sec-Fetch-Site: cross-site',
+                }
+            )
+            local ok, new_data = pcall(json.decode, data)
+            local status = string.split(headers, "\r\n")[1]:split(" ")[2]
+
+            local accounts_fd = io.fopen(`.accounts`)
+            local count_fd = io.fopen(".count")
+            local accounts = io.fread(accounts) or ""
+
+            accounts = accounts..`{status}{S}{i}{S}{v}{S}{if ok then new_data.first_name or "".." "..new_data.second_name or ""}{S}{if ok then new_data.balance}`
+
+            io.fwrite(accounts_fd, accounts)
+            io.fwrite(count_fd, tostring((tonumber(io.fread(count_fd) or "0") or 0) + 1))
+            io.fclose(accounts_fd)
+            io.fclose(count_fd)
+        end
     end
-
-    if table.find(tokens, args[3]) then
-        tgbot.SendMessage(update.message.chat.id, "Токен уже в системе")
-        return
-    end
-    table.insert(tokens, args[3])
-    io.WriteFile("gb.tokens", cbor.encode(tokens))
-    tgbot.SendMessage(update.message.chat.id, "Токен успешно добавленный")
-end
-tgbot.AddCommand("add_token", add_token)
-
-local function remove_token(update)
-    if check(update) then return end
     
-    local args = string.split(update.message.text, "/remove_token ")
-    if #args < 2 then
-        tgbot.SendMessage(update.message.chat.id, "Токен не был введен")
-        return
+    while(task.__sleep(0.1) or true) do
+        local count_fd = io.fopen(".count")
+        local count = tonumber(io.fread(count_fd) or "0") or 0
+        io.fclose(count_fd)
+        if count < tokens_count then
+            continue
+        end
+        break
     end
-
-    local id = table.find(tokens, args[2])
-    if id == nil then
-        tgbot.SendMessage(update.message.chat.id, "Токен не найден")
-        return
-    end
-
-    table.remove(tokens, id)
-
-    io.WriteFile("gb.tokens", cbor.encode(tokens))
-    tgbot.SendMessage(update.message.chat.id, "Токен успешно удален")
+    local data = io.ReadFile(".accounts")
+    io.DeleteFile(".count")
+    io.DeleteFile(".accounts")
+    return
 end
-tgbot.AddCommand("remove_token", remove_token)
+end
 
-tgbot.AddCommand("stats", function(update)
+print("Proccessing data...")
+local accounts = check_stats
+for i,v in string.split(accounts, "\n") do
+    local data = string.split(v, S)
+    if data[1] == "200" then
+        table.insert(active_accounts, {
+            owner = data[2],
+            token = data[3],
+            username = data[4]
+        })
+    else
+        table.insert(dead_accounts, {
+            owner = data[2],
+            token = data[3]
+        })
+    end
+end
+
+print(`Active accounts: {#active_accounts}`)
+print(`Dead accounts: {#dead_accounts}`)
+print("Done✅")
+
+local commands = {}
+
+commands["penis"] = function(update)
+    stt.playWAV(sound_penis)
+end
+
+commands["stats"] = function(update)
     if check(update) then return end
-    tgbot.SendMessage(update.message.chat.id, `Количество токенов: {#tokens}`)
+    local tokens_count = 0
+    for i,v in tokens do
+        tokens_count += #v
+    end
+    tgbot.SendMessage(update.message.chat.id, `Количество токенов: {tokens_count}✅\n`..
+                                              `Рабочих аккаунтов: {#active_accounts}✅\n`..
+                                              `Мертвых аккаунтов: {#dead_accounts}❌\n`..
+                                              `Время работы бота: {("%.1f"):format(os.time() - start_time/60)} минут\n`..
+                                              `Активнуто промиков за сеанс: {promo_count}🤑\n`..
+                                              `Получено звезд: {stars_count}⭐️`)
+end
+
+commands["get_stars"] = function(update)
+    task.truethread(function()
+    if check(update) then return end
+   
+    local text = "Список аккаунтов\n\n"
+
+    local balance = {}
+    local data = check_stats()
+    for i,v in data:split("\n") do
+        local args = string.split(v, S)
+
+        if args[1] == "200" then
+            table.insert(balance, {name = args[4],
+                                   owner = args[2],
+                                   balance = tonumber(args[5])})
+        end
+    end
+    table.sort(balance, function(l,r) return l.balance > r.balance end)
+    for i,v in balance do
+        text = text .. `{v.owner} {v.name} {v.balance}⭐️\n`
+    end
+    tgbot.SendMessage(update.message.chat.id, text)
+    end)
 end)
 
 tgbot.SetTextHandler(function(update)
     task.truethread(function()
     if check(update) then return end
+    if not update.message or not update.message.text then return end
+
+    if string.byte(update.message.text) == 80 then
+        (commands[`.{update.message.text}`] or function()
+            tgbot.SendMessage(update.message.chat.id, "Неизвесная комманда", nil, update.message.message_id)
+        end)()
+        return
+    end
+
     local message = tgbot.SendMessage(update.message.chat.id, "Начинаем активировать промо...", nil, update.message.message_id)
     local activated = 0
-    for i,v in tokens do
+    for i,v in active_tokens do
         task.truethread(function()
         local headers, data = network.RequestPost(
             'https://giftsbattle.com/api/v1/promo/activate/',
@@ -91,74 +187,45 @@ tgbot.SetTextHandler(function(update)
             `\{"code_data":"{update.message.text}"\}`
         )
         local status = string.split(headers, "\r\n")[1]:split(" ")[2]
-        
+
+        local checkout = io.fopen(`.checkout-{update.update_id}`)
         if status == "200" then
             local fd = io.fopen(`.stars-{update.update_id}`)
+            local fd1 = io.fopen(`.activations-{update.update_id}`)
             local file = io.fread(fd)
             if not file then
                 local data = json.decode(data)
                 io.fwrite(fd, data.sum or 0)
                 tgbot.SendMessage(update.message.chat.id, `[{i}] ХАПАЕМ ПО {data.sum or 0}⭐️`, nil, message.message_id)
             end
+            local file = io.fread(fd1)
+            io.fwrite(fd1, (tonumber(file) or 0) + 1)
             io.fclose(fd)
-            --task.__sleep(0.05 * i)
-            local fd = io.fopen(`.activations-{update.update_id}`)
-            local file = io.fread(fd)
-            io.fwrite(fd, (tonumber(file) or 0) + 1)
-            io.fclose(fd)
+            io.fclose(fd1)
         else
             print(task.__time(), status, v, data)
         end
         
+        io.fwrite(checkout, tostring((tonumber(io.fread(checkout) or "0") or 0) + 1))
+        io.fclose(checkout)
         end)
     end
-    task.__sleep(0.02 * #tokens)
+
+    while(task.__sleep(0.1) or true) do
+        local count_fd = io.fopen(`.checkout-{uodate.update_id}`)
+        local count = tonumber(io.fread(count_fd) or "0") or 0
+        io.fclose(count_fd)
+        if count < #active_tokens then
+            continue
+        end
+        break
+    end
     local activated = tonumber(io.ReadFile(`.activations-{update.update_id}`) or "0")
     local stars = tonumber(io.ReadFile(`.stars-{update.update_id}`) or "0")
     tgbot.SendMessage(update.message.chat.id, `Схавано {activated} промиков по {stars}⭐️`, nil, message.message_id)
     io.DeleteFile(`.activations-{update.update_id}`)
     io.DeleteFile(`.stars-{update.update_id}`)
-    end)
-end)
-
-tgbot.AddCommand("get_stars", function(update)
-    task.truethread(function()
-    if check(update) then return end
-    local args = string.split(update.message.text, " ")
-    local number = tonumber(args[2])
-    if not number then return end
-
-    local text = "Список аккаунтов\n\n"
-
-    local balance = {}
-    for i,v in tokens do
-        local headers, data = network.RequestGet(
-            'https://giftsbattle.com/api/v1/user',
-            {
-                'Accept: */*',
-                'Content-Type: application/json',
-                `Authorization: Bearer {v}`,
-                'Origin: https://giftsbattle.app',
-                'Referer: https://giftsbattle.app/',
-                'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15',
-                'Accept-Language: en-US',
-                'Sec-Fetch-Dest: empty',
-                'Sec-Fetch-Mode: cors',
-                'Sec-Fetch-Site: cross-site',
-            }
-        )
-        data = json.decode(data)
-
-        if data.balance and data.balance >= number then
-            table.insert(balance, {name = if data.telegram_username then "@"..data.telegram_username else data.user.first_name,
-                                   balance = data.balance})
-        end
-    end
-    table.sort(balance, function(l,r) return l.balance > r.balance end)
-    for i,v in balance do
-        text = text .. `{v.name} {v.balance}⭐️\n`
-    end
-    tgbot.SendMessage(update.message.chat.id, text)
+    io.DeleteFile(`.checkout-{update.update_id}`)
     end)
 end)
 

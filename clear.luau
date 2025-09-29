@@ -8,7 +8,8 @@ local tokens = cbor.decode(io.ReadFile(argv[1] or "gb.tokens"))
 local delete = {}
 
 local already = {}
-for i,v in tokens do
+for owner,v in tokens do
+for i,v in v do
     local headers, data = network.RequestGet(
         'https://giftsbattle.com/api/v1/user',
         {
@@ -27,27 +28,23 @@ for i,v in tokens do
     local new_data = json.decode(data)
     local status = string.split(headers, "\r\n")[1]:split(" ")[2]
     if status ~= "200" then
-        print(status, i, v, data)
-        table.insert(delete, v)
+        print(status, owner, i, v, data)
+        table.insert(delete, {owner, v})
     else
         if already[new_data.telegram_id] then
             print("\n[REPEAT]", v)
-            table.insert(delete, already[new_data.telegram_id])
+            table.insert(delete, {owner, already[new_data.telegram_id]})
         end
-        print(status, i, new_data.user.first_name)
+        print(status, owner, i, new_data.user.first_name)
         already[new_data.telegram_id] = v
-        if new_data.user.first_name == "faderiko"
-        or new_data.user.first_name == "farenoak" then
-            print(v)
-        end
     end
-    
+end
 end
 
 for i,v in delete do
-    local i = table.find(tokens, v)
-    print(`Deleting [{v}]...`)
-    table.remove(tokens, i)
+    local i = table.find(tokens[v[1]], v[2])
+    print(`Deleting [{v[2]}]...`)
+    table.remove(tokens[v[1]], i)
 end
 
 io.WriteFile(argv[2] or argv[1] or "gb.tokens", cbor.encode(tokens))
