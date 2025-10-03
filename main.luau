@@ -5,11 +5,6 @@ local tgbot = require_shared("tgbot")
 local io = require_shared("io")
 local cbor = require_shared("cbor")
 local task = require_shared("task")
-local stt = require_shared("stt")
-stt.initSpeaker()
-
-if io.ReadFile("1.mp3") then io.system("ffmpeg -i 1.mp3 -o 1.wav") end
-local sound_penis = stt.loadWAV("1.wav")
 
 tgbot.SetToken(io.ReadFile(".token"))
 
@@ -37,9 +32,9 @@ print("Fetching activity...")
 local S = "_|1623|_"
 
 function check_stats()
-for i,v in tokens then
+for owner,v in tokens do
     for i,v in v do
-        task.__truethread(function()
+        task.truethread(function()
             local headers, data = network.RequestGet(
                 'https://giftsbattle.com/api/v1/user',
                 {
@@ -60,18 +55,18 @@ for i,v in tokens then
 
             local accounts_fd = io.fopen(`.accounts`)
             local count_fd = io.fopen(".count")
-            local accounts = io.fread(accounts) or ""
+            local accounts = io.fread(accounts_fd) or ""
 
-            accounts = accounts..`{status}{S}{i}{S}{v}{S}{if ok then new_data.first_name or "".." "..new_data.second_name or ""}{S}{if ok then new_data.balance}`
+            accounts = accounts..`{status}{S}{owner}{S}{v}{S}{if ok then (if new_data.telegram_username then "@"..new_data.telegram_username else new_data.user.first_name) else ""}{S}{if ok then new_data.balance else ""}\n`
 
             io.fwrite(accounts_fd, accounts)
             io.fwrite(count_fd, tostring((tonumber(io.fread(count_fd) or "0") or 0) + 1))
             io.fclose(accounts_fd)
             io.fclose(count_fd)
-        end
+        end)
     end
-    
-    while(task.__sleep(0.1) or true) do
+end
+while(task.__sleep(0.1) or true) do
         local count_fd = io.fopen(".count")
         local count = tonumber(io.fread(count_fd) or "0") or 0
         io.fclose(count_fd)
@@ -83,13 +78,13 @@ for i,v in tokens then
     local data = io.ReadFile(".accounts")
     io.DeleteFile(".count")
     io.DeleteFile(".accounts")
-    return
-end
+    return data
 end
 
 print("Proccessing data...")
-local accounts = check_stats
+local accounts = check_stats()
 for i,v in string.split(accounts, "\n") do
+    if v == "" then continue end
     local data = string.split(v, S)
     if data[1] == "200" then
         table.insert(active_accounts, {
@@ -109,13 +104,13 @@ print(`Active accounts: {#active_accounts}`)
 print(`Dead accounts: {#dead_accounts}`)
 print("Done✅")
 
+local start_time = os.time()
 local commands = {}
 
-commands["penis"] = function(update)
-    stt.playWAV(sound_penis)
-end
+local promo_count = 0
+local stars_count = 0
 
-commands["stats"] = function(update)
+commands[".stats"] = function(update)
     if check(update) then return end
     local tokens_count = 0
     for i,v in tokens do
@@ -124,12 +119,12 @@ commands["stats"] = function(update)
     tgbot.SendMessage(update.message.chat.id, `Количество токенов: {tokens_count}✅\n`..
                                               `Рабочих аккаунтов: {#active_accounts}✅\n`..
                                               `Мертвых аккаунтов: {#dead_accounts}❌\n`..
-                                              `Время работы бота: {("%.1f"):format(os.time() - start_time/60)} минут\n`..
+                                              `Время работы бота: {("%.1f"):format((os.time() - start_time)/60)} минут\n`..
                                               `Активнуто промиков за сеанс: {promo_count}🤑\n`..
                                               `Получено звезд: {stars_count}⭐️`)
 end
 
-commands["get_stars"] = function(update)
+commands[".get_stars"] = function(update)
     task.truethread(function()
     if check(update) then return end
    
@@ -148,34 +143,34 @@ commands["get_stars"] = function(update)
     end
     table.sort(balance, function(l,r) return l.balance > r.balance end)
     for i,v in balance do
-        text = text .. `{v.owner} {v.name} {v.balance}⭐️\n`
+        text = text .. ("%-10s%s %d⭐️\n"):format(v.owner, v.name, v.balance)
     end
     tgbot.SendMessage(update.message.chat.id, text)
     end)
-end)
+end
 
 tgbot.SetTextHandler(function(update)
     task.truethread(function()
     if check(update) then return end
     if not update.message or not update.message.text then return end
 
-    if string.byte(update.message.text) == 80 then
-        (commands[`.{update.message.text}`] or function()
+    if string.byte(update.message.text) == 46 then
+        (commands[update.message.text] or function()
             tgbot.SendMessage(update.message.chat.id, "Неизвесная комманда", nil, update.message.message_id)
-        end)()
+        end)(update)
         return
     end
 
     local message = tgbot.SendMessage(update.message.chat.id, "Начинаем активировать промо...", nil, update.message.message_id)
     local activated = 0
-    for i,v in active_tokens do
+    for i,v in active_accounts do
         task.truethread(function()
         local headers, data = network.RequestPost(
             'https://giftsbattle.com/api/v1/promo/activate/',
             {
                 'Accept: */*',
                 'Content-Type: application/json',
-                `Authorization: Bearer {v}`,
+                `Authorization: Bearer {v.token}`,
                 'Origin: https://giftsbattle.app',
                 'Referer: https://giftsbattle.app/',
                 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15',
@@ -203,7 +198,7 @@ tgbot.SetTextHandler(function(update)
             io.fclose(fd)
             io.fclose(fd1)
         else
-            print(task.__time(), status, v, data)
+            --print(task.__time(), status, v.token, data)
         end
         
         io.fwrite(checkout, tostring((tonumber(io.fread(checkout) or "0") or 0) + 1))
@@ -211,17 +206,23 @@ tgbot.SetTextHandler(function(update)
         end)
     end
 
-    while(task.__sleep(0.1) or true) do
-        local count_fd = io.fopen(`.checkout-{uodate.update_id}`)
+    local limit = 0
+
+    while limit < 0.1*10*60 do
+        task.__sleep(0.1)
+        limit += 1
+        local count_fd = io.fopen(`.checkout-{update.update_id}`)
         local count = tonumber(io.fread(count_fd) or "0") or 0
         io.fclose(count_fd)
-        if count < #active_tokens then
+        if count < #active_accounts then
             continue
         end
         break
     end
     local activated = tonumber(io.ReadFile(`.activations-{update.update_id}`) or "0")
     local stars = tonumber(io.ReadFile(`.stars-{update.update_id}`) or "0")
+    promo_count += activated
+    stars_count += stars*activated
     tgbot.SendMessage(update.message.chat.id, `Схавано {activated} промиков по {stars}⭐️`, nil, message.message_id)
     io.DeleteFile(`.activations-{update.update_id}`)
     io.DeleteFile(`.stars-{update.update_id}`)
